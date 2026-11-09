@@ -1,6 +1,6 @@
 [project]
 name = "mcp-search-console"
-version = "0.4.2"
+version = "0.4.2+briebug.1"
 description = "Google Search Console integration for Model Context Protocol (MCP)"
 readme = "README.md"
 requires-python = ">=3.11"

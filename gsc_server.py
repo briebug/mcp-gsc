@@ -158,6 +158,11 @@ def get_gsc_service():
     """
     if USE_ADC:
         creds, _project = google.auth.default(scopes=SCOPES)
+        # For an impersonated ADC file, google.auth.default keeps the scopes stored in
+        # the file (for example analytics.readonly + cloud-platform) and ignores ours.
+        # Narrow them explicitly so only the Search Console scope is ever requested.
+        if hasattr(creds, "with_scopes"):
+            creds = creds.with_scopes(SCOPES)
         return build("searchconsole", "v1", credentials=creds, cache_discovery=False)
 
     # Fail-fast if credential env vars are set but point to files that don't exist.
