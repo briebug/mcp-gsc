@@ -80,14 +80,16 @@ class TestApplicationDefaultCredentials(unittest.TestCase):
 
     def test_adc_used_with_readonly_scope_and_nothing_else(self):
         mod = _load({"GSC_USE_ADC": "true", "GSC_SKIP_OAUTH": "false"})
-        creds = MagicMock()
-        with patch("gsc_server.google.auth.default", return_value=(creds, "briebug")) as default, \
+        stored, creds = MagicMock(), MagicMock()
+        stored.with_scopes.return_value = creds
+        with patch("gsc_server.google.auth.default", return_value=(stored, "briebug")) as default, \
              patch("gsc_server.get_gsc_service_oauth", side_effect=AssertionError("OAuth must not run")), \
              patch("gsc_server.service_account.Credentials.from_service_account_file",
                    side_effect=AssertionError("key files must not be read")), \
              patch("gsc_server.build", return_value="svc") as build:
             self.assertEqual(mod.get_gsc_service(), "svc")
         default.assert_called_once_with(scopes=READONLY)
+        stored.with_scopes.assert_called_once_with(READONLY)
         self.assertIs(build.call_args.kwargs["credentials"], creds)
 
     def test_adc_failure_fails_closed(self):
@@ -242,3 +244,24 @@ class TestLiveTestIsolation(unittest.TestCase):
             mod = test_live._fresh_server()
         self.assertIsNot(mod, stale)
         self.assertFalse(mod.SKIP_OAUTH)
+
+
+class TestAdcScopeIsForced(unittest.TestCase):
+
+    def test_impersonated_adc_requests_only_the_readonly_scope(self):
+        """google.auth.default(scopes=...) keeps the scopes stored in an impersonated ADC
+        file (here Analytics + cloud-platform). The server must narrow them itself.
+        Uses a real impersonated credential object, not a mock, so the scope is real."""
+        from google.auth import impersonated_credentials
+        stored = impersonated_credentials.Credentials(
+            source_credentials=MagicMock(),
+            target_principal="reader@example.iam.gserviceaccount.com",
+            target_scopes=["https://www.googleapis.com/auth/analytics.readonly",
+                           "https://www.googleapis.com/auth/cloud-platform"],
+        )
+        mod = _load({"GSC_USE_ADC": "true", "GSC_SKIP_OAUTH": "false"})
+        with patch("gsc_server.google.auth.default", return_value=(stored, None)), \
+             patch("gsc_server.build", return_value="svc") as build:
+            mod.get_gsc_service()
+        used = build.call_args.kwargs["credentials"]
+        self.assertEqual(used._target_scopes, READONLY)
