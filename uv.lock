@@ -516,7 +516,7 @@ cli = [
 
 [[package]]
 name = "mcp-search-console"
-version = "0.4.2"
+version = "0.4.2+briebug.1"
 source = { editable = "." }
 dependencies = [
     { name = "google-api-python-client" },

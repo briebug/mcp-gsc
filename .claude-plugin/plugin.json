@@ -1,7 +1,7 @@
 {
   "name": "mcp-search-console",
   "displayName": "Search Console MCP",
-  "version": "0.3.0",
+  "version": "0.4.2+briebug.1",
   "description": "Connect Google Search Console to Claude Code. Query SEO data, inspect URLs, audit indexing, and identify content opportunities through natural language.",
   "author": {
     "name": "Amin Foroutan"

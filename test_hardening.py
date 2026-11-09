@@ -265,3 +265,20 @@ class TestAdcScopeIsForced(unittest.TestCase):
             mod.get_gsc_service()
         used = build.call_args.kwargs["credentials"]
         self.assertEqual(used._target_scopes, READONLY)
+
+
+class TestForkVersion(unittest.TestCase):
+    """The fork must be distinguishable from upstream's PyPI release of the same number."""
+
+    def _pyproject_version(self):
+        import tomllib
+        with open(os.path.join(HERE, "pyproject.toml"), "rb") as f:
+            return tomllib.load(f)["project"]["version"]
+
+    def test_version_carries_the_briebug_label(self):
+        self.assertRegex(self._pyproject_version(), r"^\d+\.\d+\.\d+\+briebug\.\d+$")
+
+    def test_plugin_manifests_match_the_package_version(self):
+        for name in (".claude-plugin/plugin.json", ".cursor-plugin/plugin.json"):
+            with open(os.path.join(HERE, name)) as f:
+                self.assertEqual(json.load(f)["version"], self._pyproject_version(), name)
