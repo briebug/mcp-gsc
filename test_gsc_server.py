@@ -958,42 +958,8 @@ class TestSafetyGuards(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("Safety", result)
 
 
-# ---------------------------------------------------------------------------
-# TestReauthenticate
-# ---------------------------------------------------------------------------
-
-class TestReauthenticate(unittest.IsolatedAsyncioTestCase):
-
-    async def test_deletes_token_file(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            token_path = os.path.join(tmpdir, "token.json")
-            open(token_path, "w").write('{"old": "token"}')
-            secrets_path = os.path.join(tmpdir, "secrets.json")
-            open(secrets_path, "w").write("{}")
-
-            mod = _load_module()
-
-            mock_creds = MagicMock()
-            mock_creds.to_json.return_value = '{"token": "new"}'
-
-            with patch.object(mod, "TOKEN_FILE", token_path), \
-                 patch.object(mod, "OAUTH_CLIENT_SECRETS_FILE", secrets_path), \
-                 patch("gsc_server.InstalledAppFlow") as mock_flow_cls:
-                mock_flow = MagicMock()
-                mock_flow.run_local_server.return_value = mock_creds
-                mock_flow_cls.from_client_secrets_file.return_value = mock_flow
-                result = await mod.reauthenticate()
-
-            self.assertIn("Successfully authenticated", result)
-            self.assertIn("Previous session deleted", result)
-            self.assertTrue(os.path.exists(token_path))
-
-    async def test_returns_error_when_no_secrets_file(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            mod = _load_module()
-            with patch.object(mod, "OAUTH_CLIENT_SECRETS_FILE", os.path.join(tmpdir, "no_secrets.json")):
-                result = await mod.reauthenticate()
-        self.assertIn("Error", result)
+# TestReauthenticate removed: the briebug fork drops the reauthenticate tool
+# (security review 2026-11-09, F6). test_hardening.py asserts it is not registered.
 
 
 # ---------------------------------------------------------------------------
