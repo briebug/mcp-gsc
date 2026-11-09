@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 import asyncio
 import logging
 import os
@@ -36,7 +36,7 @@ from googleapiclient.errors import HttpError
 logging.getLogger("googleapiclient.discovery_cache").setLevel(logging.ERROR)
 
 # MCP
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import FastMCP  # noqa: E402 -- after the discovery-cache log level is set
 
 mcp = FastMCP("gsc-server")
 
@@ -177,7 +177,9 @@ def get_gsc_service():
             logging.warning("OAuth authentication failed: %s", e)
             pass
     
-    # Try service account authentication
+    # Try service account authentication. A key file that exists but fails to load
+    # is recorded, so the final error names it and the reason instead of hiding it.
+    key_failures = []
     for cred_path in POSSIBLE_CREDENTIAL_PATHS:
         if cred_path and os.path.exists(cred_path):
             try:
@@ -186,8 +188,15 @@ def get_gsc_service():
                 )
                 return build("searchconsole", "v1", credentials=creds, cache_discovery=False)
             except Exception as e:
+                key_failures.append(f"{cred_path}: {e}")
                 continue  # Try the next path if this one fails
-    
+
+    if key_failures:
+        raise FileNotFoundError(
+            "Service account credentials could not be loaded:\n- "
+            + "\n- ".join(key_failures)
+        )
+
     # If we get here, none of the authentication methods worked.
     # Note: uvx users can't place files "in the script directory" because uvx runs
     # the code from ~/.cache/uv/archive-v0/<hash>/lib/python*/site-packages/ — an
@@ -249,8 +258,8 @@ def get_gsc_service_oauth():
             # Check if client secrets file exists
             if not os.path.exists(OAUTH_CLIENT_SECRETS_FILE):
                 raise FileNotFoundError(
-                    f"OAuth client secrets file not found. Please place a client_secrets.json file in the script directory "
-                    f"or set the GSC_OAUTH_CLIENT_SECRETS_FILE environment variable."
+                    "OAuth client secrets file not found. Please place a client_secrets.json file in the script directory "
+                    "or set the GSC_OAUTH_CLIENT_SECRETS_FILE environment variable."
                 )
 
             # Start OAuth flow — opens a browser window on macOS even from MCP subprocess.
@@ -433,24 +442,24 @@ async def add_site(site_url: str) -> str:
             return f"Site {site_url} is already added to Search Console."
         elif error_code == 403:
             if error_reason == 'forbidden':
-                return f"Error: You don't have permission to add this site. Please verify ownership first."
+                return "Error: You don't have permission to add this site. Please verify ownership first."
             elif error_reason == 'quotaExceeded':
-                return f"Error: API quota exceeded. Please try again later."
+                return "Error: API quota exceeded. Please try again later."
             else:
                 return f"Error: Permission denied. {error_message}"
         elif error_code == 400:
             if error_reason == 'invalidParameter':
-                return f"Error: Invalid site URL format. Please check the URL format and try again."
+                return "Error: Invalid site URL format. Please check the URL format and try again."
             else:
                 return f"Error: Bad request. {error_message}"
         elif error_code == 401:
-            return f"Error: Unauthorized. Please check your credentials."
+            return "Error: Unauthorized. Please check your credentials."
         elif error_code == 429:
-            return f"Error: Too many requests. Please try again later."
+            return "Error: Too many requests. Please try again later."
         elif error_code == 500:
-            return f"Error: Internal server error from Google Search Console API. Please try again later."
+            return "Error: Internal server error from Google Search Console API. Please try again later."
         elif error_code == 503:
-            return f"Error: Service unavailable. Google Search Console API is currently down. Please try again later."
+            return "Error: Service unavailable. Google Search Console API is currently down. Please try again later."
         else:
             return f"Error adding site (HTTP {error_code}): {error_message}"
     except Exception as e:
@@ -487,24 +496,24 @@ async def delete_site(site_url: str) -> str:
             return f"Site {site_url} was not found in Search Console."
         elif error_code == 403:
             if error_reason == 'forbidden':
-                return f"Error: You don't have permission to remove this site."
+                return "Error: You don't have permission to remove this site."
             elif error_reason == 'quotaExceeded':
-                return f"Error: API quota exceeded. Please try again later."
+                return "Error: API quota exceeded. Please try again later."
             else:
                 return f"Error: Permission denied. {error_message}"
         elif error_code == 400:
             if error_reason == 'invalidParameter':
-                return f"Error: Invalid site URL format. Please check the URL format and try again."
+                return "Error: Invalid site URL format. Please check the URL format and try again."
             else:
                 return f"Error: Bad request. {error_message}"
         elif error_code == 401:
-            return f"Error: Unauthorized. Please check your credentials."
+            return "Error: Unauthorized. Please check your credentials."
         elif error_code == 429:
-            return f"Error: Too many requests. Please try again later."
+            return "Error: Too many requests. Please try again later."
         elif error_code == 500:
-            return f"Error: Internal server error from Google Search Console API. Please try again later."
+            return "Error: Internal server error from Google Search Console API. Please try again later."
         elif error_code == 503:
-            return f"Error: Service unavailable. Google Search Console API is currently down. Please try again later."
+            return "Error: Service unavailable. Google Search Console API is currently down. Please try again later."
         else:
             return f"Error removing site (HTTP {error_code}): {error_message}"
     except Exception as e:
@@ -1485,10 +1494,8 @@ async def list_sitemaps_enhanced(site_url: str, sitemap_index: str | None = None
         # Get sitemaps list
         if sitemap_index:
             sitemaps = await _execute(service.sitemaps().list(siteUrl=site_url, sitemapIndex=sitemap_index))
-            source = f"child sitemaps from index: {sitemap_index}"
         else:
             sitemaps = await _execute(service.sitemaps().list(siteUrl=site_url))
-            source = "all submitted sitemaps"
         
         if not sitemaps.get("sitemap"):
             return f"No sitemaps found for {site_url}" + (f" in index {sitemap_index}" if sitemap_index else ".")

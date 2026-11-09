@@ -5,7 +5,6 @@ All Google API calls are mocked — no real credentials are needed to run these 
 Run with: pytest test_gsc_server.py -v
 """
 import asyncio
-import importlib
 import io
 import json
 import os
@@ -13,8 +12,7 @@ import sys
 import tempfile
 import time
 import unittest
-from datetime import datetime, timedelta
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
 
 
 # ---------------------------------------------------------------------------
@@ -88,7 +86,7 @@ class TestAuth(unittest.TestCase):
                     "GSC_CONFIG_DIR": new_config_dir,
                 }
                 with patch.dict(os.environ, env, clear=False):
-                    import gsc_server as mod
+                    import gsc_server as mod  # noqa: F401 -- the import runs the token migration under test
 
                 new_token_path = os.path.join(new_config_dir, "token.json")
                 self.assertTrue(os.path.exists(new_token_path), "Token was not migrated to new location")
