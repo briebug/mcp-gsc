@@ -97,17 +97,33 @@ USE_ADC = os.environ.get("GSC_USE_ADC", "").lower() in ("true", "1", "yes")
 
 
 def _write_token(path: str, data: str) -> None:
-    """Write an OAuth token readable by its owner only (0600).
+    """Write an OAuth token readable by its owner only (0600), replacing it atomically.
 
-    The file holds a long-lived refresh token. os.open sets 0600 on a new file;
-    fchmod also tightens an existing file that an older version wrote as 0644.
+    The file holds a long-lived refresh token. The new token is written to a
+    temporary file created with 0600, then moved over the old one, so a failed
+    save never erases a working token, and a file an older version wrote as
+    0644 is replaced by a 0600 one. os.fchmod is used only where it exists
+    (it is missing on Windows before Python 3.13); POSIX modes do not apply there.
     """
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    tmp = f"{path}.{os.getpid()}.tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
-        os.fchmod(fd, 0o600)
-        os.write(fd, data.encode("utf-8"))
-    finally:
-        os.close(fd)
+        try:
+            fchmod = getattr(os, "fchmod", None)
+            if fchmod is not None:
+                fchmod(fd, 0o600)
+            view = memoryview(data.encode("utf-8"))
+            while view:
+                view = view[os.write(fd, view):]
+        finally:
+            os.close(fd)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
 
 # Safety flag for destructive operations (add_site, delete_site, delete_sitemap).
 # Default is false — set GSC_ALLOW_DESTRUCTIVE=true to enable these tools.

@@ -1,7 +1,8 @@
 """
 Hardening tests for the briebug fork (security review of 2026-11-09, controls 1-4).
 
-Each test asserts a hardened behaviour and fails on upstream 0.4.2.
+Most tests assert a hardened behaviour and fail on upstream 0.4.2; a few are
+positive controls that pass either way (for example, stdio still starts).
 All Google calls are mocked. Run with: pytest test_hardening.py -v
 """
 import json
@@ -17,7 +18,7 @@ READONLY = ["https://www.googleapis.com/auth/webmasters.readonly"]
 
 
 def _load(env: dict | None = None):
-    base = {"GSC_SKIP_OAUTH": "true", "GSC_DATA_STATE": "all", "GSC_ALLOW_DESTRUCTIVE": "false"}
+    base = {"GSC_SKIP_OAUTH": "true", "GSC_USE_ADC": "false", "GSC_DATA_STATE": "all", "GSC_ALLOW_DESTRUCTIVE": "false"}
     with patch.dict(os.environ, {**base, **(env or {})}, clear=False):
         sys.modules.pop("gsc_server", None)
         import gsc_server as mod
@@ -188,3 +189,56 @@ class TestToolSurface(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# --- Review round 1 on briebug/mcp-gsc#2 (Greptile) -----------------------------------------
+
+class TestTokenWriteSafety(unittest.TestCase):
+
+    def test_failed_write_keeps_the_existing_token(self):
+        """A failed save must not erase the working token (upstream's open('w') did; so did O_TRUNC)."""
+        mod = _load()
+        with tempfile.TemporaryDirectory() as tmp:
+            token = os.path.join(tmp, "token.json")
+            with open(token, "w") as f:
+                f.write('{"old": "token"}')
+            with patch("gsc_server.os.write", side_effect=OSError("disk full")):
+                with self.assertRaises(OSError):
+                    mod._write_token(token, '{"new": "token"}')
+            with open(token) as f:
+                self.assertEqual(f.read(), '{"old": "token"}')
+            self.assertEqual(os.listdir(tmp), ["token.json"], "no temporary file may be left behind")
+
+    def test_works_where_fchmod_does_not_exist(self):
+        """os.fchmod is missing on Windows before Python 3.13."""
+        mod = _load()
+        with tempfile.TemporaryDirectory() as tmp:
+            token = os.path.join(tmp, "token.json")
+            with patch.object(mod.os, "fchmod", None, create=True):
+                mod._write_token(token, '{"t": 1}')
+            with open(token) as f:
+                self.assertEqual(f.read(), '{"t": 1}')
+
+
+class TestPluginConfigEnv(unittest.TestCase):
+
+    def test_configs_do_not_blank_the_users_environment(self):
+        """An empty string in a plugin env block overrides what the user exported."""
+        for name in TestPinnedLaunch.CONFIGS:
+            with open(os.path.join(HERE, name)) as f:
+                server = next(iter(json.load(f)["mcpServers"].values()))
+            blanks = [k for k, v in server.get("env", {}).items() if v == ""]
+            self.assertEqual(blanks, [], name)
+            self.assertNotIn("GSC_USE_ADC", server.get("env", {}), name)
+
+
+class TestLiveTestIsolation(unittest.TestCase):
+
+    def test_live_checks_import_a_fresh_server_under_the_real_environment(self):
+        import test_live
+        stale = MagicMock(SKIP_OAUTH=True)
+        with patch.dict(sys.modules, {"gsc_server": stale}), \
+             patch.dict(os.environ, {"GSC_SKIP_OAUTH": "false"}):
+            mod = test_live._fresh_server()
+        self.assertIsNot(mod, stale)
+        self.assertFalse(mod.SKIP_OAUTH)

@@ -11,9 +11,21 @@ It only reads. CI does not set GSC_LIVE_SITE, so CI skips it.
 import asyncio
 import json
 import os
+import sys
 import unittest
 
 SITE = os.environ.get("GSC_LIVE_SITE")
+
+
+def _fresh_server():
+    """Import gsc_server anew under the real environment.
+
+    The server reads its settings at import time, and the unit tests leave a copy
+    imported with GSC_SKIP_OAUTH=true in sys.modules. Reusing it would skip OAuth here.
+    """
+    sys.modules.pop("gsc_server", None)
+    import gsc_server
+    return gsc_server
 
 
 @unittest.skipUnless(SITE, "set GSC_LIVE_SITE (and real credentials) to run the live test")
@@ -22,8 +34,7 @@ class TestLiveSearchConsole(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         os.environ.setdefault("GSC_ALLOW_DESTRUCTIVE", "false")
-        import gsc_server
-        cls.mod = gsc_server
+        cls.mod = _fresh_server()
 
     def run_tool(self, coro):
         return asyncio.run(coro)

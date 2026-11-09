@@ -23,6 +23,7 @@ def _load_module(env_overrides: dict | None = None):
     """Import gsc_server with a fresh environment."""
     env = {
         "GSC_SKIP_OAUTH": "true",          # prevent live OAuth attempts by default
+        "GSC_USE_ADC": "false",            # a developer's exported ADC setting must not leak in
         "GSC_DATA_STATE": "all",
         "GSC_ALLOW_DESTRUCTIVE": "false",
         **(env_overrides or {}),

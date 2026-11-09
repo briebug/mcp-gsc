@@ -9,13 +9,7 @@
         "--frozen",
         "python",
         "gsc_server.py"
-      ],
-      "env": {
-        "GSC_USE_ADC": "",
-        "GSC_CREDENTIALS_PATH": "",
-        "GSC_OAUTH_CLIENT_SECRETS_FILE": "",
-        "GSC_DATA_STATE": "all"
-      }
+      ]
     }
   }
 }

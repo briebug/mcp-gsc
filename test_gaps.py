@@ -20,7 +20,7 @@ SITEMAP = "https://example.com/sitemap.xml"
 
 
 def _load(env: dict | None = None):
-    base = {"GSC_SKIP_OAUTH": "true", "GSC_DATA_STATE": "all", "GSC_ALLOW_DESTRUCTIVE": "false"}
+    base = {"GSC_SKIP_OAUTH": "true", "GSC_USE_ADC": "false", "GSC_DATA_STATE": "all", "GSC_ALLOW_DESTRUCTIVE": "false"}
     with patch.dict(os.environ, {**base, **(env or {})}, clear=False):
         sys.modules.pop("gsc_server", None)
         import gsc_server as mod
