@@ -1,5 +1,15 @@
 # Google Search Console MCP Server for SEOs
 
+> **Briebug fork.** This is `briebug/mcp-gsc`, a hardened fork of [AminForou/mcp-gsc](https://github.com/AminForou/mcp-gsc), made after a security review on 9 November 2026. Differences from upstream:
+>
+> - **Pinned install only.** Install from a reviewed commit of this repository (for example `uv tool install git+https://github.com/briebug/mcp-gsc@<commit>`), never from the PyPI package `mcp-search-console`. The bundled plugin configs run this checkout with `uv run --frozen`.
+> - **stdio only.** The SSE/HTTP network mode is removed: it served every tool with no authentication and with DNS-rebinding protection turned off.
+> - **Keyless credentials.** Set `GSC_USE_ADC=true` to use Google Application Default Credentials only, for example an impersonated read-only service account. OAuth tokens and key files are then never read, and a missing credential fails closed.
+> - **Owner-only token file.** An OAuth token is written with `0600` permissions.
+> - **Smaller tool surface.** `submit_sitemap` needs `GSC_ALLOW_DESTRUCTIVE=true` like the other write tools. The `reauthenticate` and `get_creator_info` tools are removed.
+>
+> Upstream changes come in only by reviewed merge. The Option A (uvx) and Remote Deployment sections below describe upstream and do not apply to this fork.
+
 A Model Context Protocol (MCP) server that connects [Google Search Console](https://search.google.com/search-console/about) (GSC) to AI assistants, allowing you to analyze your SEO data through natural language conversations. Works with **Claude Desktop**, **Cursor**, **Codex CLI**, **Gemini CLI**, **Antigravity**, and any other MCP-compatible client.
 
 > **Skip setup, get more.** A more advanced hosted version — one-click sign-in, GA4, Google Ads, SERP lookups, keyword research, and a lot more. Works with Claude, ChatGPT, Cursor, Grok, and any other MCP client.
@@ -63,9 +73,8 @@ See the full version history in the [Changelog](#changelog) below.
 | `get_sitemaps` | Lists all sitemaps for a site | Site URL |
 | `list_sitemaps_enhanced` | Detailed sitemap info including errors and warnings | Site URL |
 | `manage_sitemaps` | Submit or delete sitemaps | Site URL, action |
-| `reauthenticate` | Re-run the OAuth browser login (switch accounts) | Nothing |
 
-*Ask your AI assistant to "call get_capabilities" for the full list of all 20 tools.*
+*Ask your AI assistant to "call get_capabilities" for the full list of all 19 tools.*
 
 ---
 
@@ -116,7 +125,7 @@ On first use, a browser window will open asking you to sign in to your Google ac
 
 ### Step 2 — Installation
 
-#### Option A — uvx (Recommended)
+#### Option A — uvx (upstream only, not supported in the Briebug fork)
 
 No cloning, no Python installation, no virtual environments. `uvx` downloads and runs the server automatically and keeps it up to date.
 
@@ -408,7 +417,7 @@ The MCP server runs locally on your machine. It only works in the **Claude Deskt
 
 ## Safety: Destructive Operations
 
-By default, `add_site`, `delete_site`, and `delete_sitemap` are disabled. To enable them:
+By default, `add_site`, `delete_site`, `submit_sitemap` and `delete_sitemap` are disabled. To enable them:
 
 ```json
 "GSC_ALLOW_DESTRUCTIVE": "true"
@@ -418,34 +427,7 @@ By default, `add_site`, `delete_site`, and `delete_sitemap` are disabled. To ena
 
 ## Remote Deployment & Docker (Advanced)
 
-The standard setup runs the server locally. This section is only for users who want to run it on a remote server or in a container.
-
-### HTTP Transport
-
-```bash
-MCP_TRANSPORT=sse MCP_HOST=0.0.0.0 MCP_PORT=3001 python gsc_server.py
-```
-
-| Variable | Default | Description |
-|---|---|---|
-| `MCP_TRANSPORT` | `stdio` | Set to `sse` for network/remote use |
-| `MCP_HOST` | `127.0.0.1` | Host to bind |
-| `MCP_PORT` | `3001` | Port to bind |
-
-### Docker
-
-```bash
-docker build -t mcp-gsc .
-
-docker run \
-  -e MCP_TRANSPORT=sse \
-  -e MCP_HOST=0.0.0.0 \
-  -e MCP_PORT=3001 \
-  -e GSC_CREDENTIALS_PATH=/app/credentials.json \
-  -v /path/to/credentials.json:/app/credentials.json \
-  -p 3001:3001 \
-  mcp-gsc
-```
+Not supported in the Briebug fork. The upstream SSE/HTTP transport had no authentication and disabled DNS-rebinding protection, so it is removed: the server runs over stdio only, and `MCP_TRANSPORT` accepts only `stdio`.
 
 ---
 

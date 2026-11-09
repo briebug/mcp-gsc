@@ -1,0 +1,79 @@
+# Lint, build and test on every pull request and on main.
+# Actions are pinned to commit SHAs and tool versions are exact, so a
+# compromised or changed release cannot alter what CI runs (review finding F1).
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_VERSION: "0.13.5"
+  RUFF_VERSION: "0.17.2"
+  PYTEST_VERSION: "9.1.1"
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: ${{ env.UV_VERSION }}
+      - name: Ruff (rules in pyproject.toml)
+        run: uvx "ruff==${RUFF_VERSION}" check .
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: ${{ env.UV_VERSION }}
+      - name: Lockfile matches pyproject.toml
+        run: uv lock --check
+      - name: Build sdist and wheel
+        run: uv build
+      - name: Installed wheel imports and registers its tools
+        # Run outside the checkout so Python cannot import the source file instead
+        # of the wheel, and assert where the module was loaded from.
+        working-directory: ${{ runner.temp }}
+        run: |
+          uv run --isolated --no-project --with "$GITHUB_WORKSPACE"/dist/*.whl python -c "
+          import asyncio, gsc_server
+          assert 'site-packages' in gsc_server.__file__, gsc_server.__file__
+          names = {t.name for t in asyncio.run(gsc_server.mcp.list_tools())}
+          assert 'list_properties' in names, names
+          assert not names & {'reauthenticate', 'get_creator_info'}, names
+          print(len(names), 'tools registered')
+          "
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: ${{ env.UV_VERSION }}
+      - name: Unit tests (Google APIs mocked; the live test skips without GSC_LIVE_SITE)
+        run: uv run --frozen --with "pytest==${PYTEST_VERSION}" pytest -q -rs

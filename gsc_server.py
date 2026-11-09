@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 import asyncio
 import logging
 import os
@@ -36,7 +36,7 @@ from googleapiclient.errors import HttpError
 logging.getLogger("googleapiclient.discovery_cache").setLevel(logging.ERROR)
 
 # MCP
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import FastMCP  # noqa: E402 -- after the discovery-cache log level is set
 
 mcp = FastMCP("gsc-server")
 
@@ -88,6 +88,43 @@ if os.path.exists(_OLD_TOKEN) and not os.path.exists(TOKEN_FILE):
 # Environment variable to skip OAuth authentication
 SKIP_OAUTH = os.environ.get("GSC_SKIP_OAUTH", "").lower() in ("true", "1", "yes")
 
+# Use Google Application Default Credentials (google.auth.default) and nothing else.
+# This allows keyless, short-lived access through an impersonated service account
+# (`gcloud auth application-default login --impersonate-service-account=...`).
+# When set, OAuth tokens and service-account key files are never read, and a
+# missing or invalid credential fails closed instead of falling back.
+USE_ADC = os.environ.get("GSC_USE_ADC", "").lower() in ("true", "1", "yes")
+
+
+def _write_token(path: str, data: str) -> None:
+    """Write an OAuth token readable by its owner only (0600), replacing it atomically.
+
+    The file holds a long-lived refresh token. The new token is written to a
+    temporary file created with 0600, then moved over the old one, so a failed
+    save never erases a working token, and a file an older version wrote as
+    0644 is replaced by a 0600 one. os.fchmod is used only where it exists
+    (it is missing on Windows before Python 3.13); POSIX modes do not apply there.
+    """
+    tmp = f"{path}.{os.getpid()}.tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        try:
+            fchmod = getattr(os, "fchmod", None)
+            if fchmod is not None:
+                fchmod(fd, 0o600)
+            view = memoryview(data.encode("utf-8"))
+            while view:
+                view = view[os.write(fd, view):]
+        finally:
+            os.close(fd)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+
 # Safety flag for destructive operations (add_site, delete_site, delete_sitemap).
 # Default is false — set GSC_ALLOW_DESTRUCTIVE=true to enable these tools.
 ALLOW_DESTRUCTIVE = os.environ.get("GSC_ALLOW_DESTRUCTIVE", "false").lower() in ("true", "1", "yes")
@@ -116,8 +153,13 @@ SCOPES = WRITE_SCOPES if ALLOW_DESTRUCTIVE else READONLY_SCOPES
 def get_gsc_service():
     """
     Returns an authorized Search Console service object.
-    First tries OAuth authentication, then falls back to service account.
+    With GSC_USE_ADC, uses Application Default Credentials only (fails closed).
+    Otherwise tries OAuth authentication first, then falls back to service account.
     """
+    if USE_ADC:
+        creds, _project = google.auth.default(scopes=SCOPES)
+        return build("searchconsole", "v1", credentials=creds, cache_discovery=False)
+
     # Fail-fast if credential env vars are set but point to files that don't exist.
     # Without this, a typo'd or uvx-incompatible path would silently fall through to
     # SCRIPT_DIR/cwd fallbacks (which don't work under uvx) and emit a misleading
@@ -151,7 +193,9 @@ def get_gsc_service():
             logging.warning("OAuth authentication failed: %s", e)
             pass
     
-    # Try service account authentication
+    # Try service account authentication. A key file that exists but fails to load
+    # is recorded, so the final error names it and the reason instead of hiding it.
+    key_failures = []
     for cred_path in POSSIBLE_CREDENTIAL_PATHS:
         if cred_path and os.path.exists(cred_path):
             try:
@@ -160,8 +204,15 @@ def get_gsc_service():
                 )
                 return build("searchconsole", "v1", credentials=creds, cache_discovery=False)
             except Exception as e:
+                key_failures.append(f"{cred_path}: {e}")
                 continue  # Try the next path if this one fails
-    
+
+    if key_failures:
+        raise FileNotFoundError(
+            "Service account credentials could not be loaded:\n- "
+            + "\n- ".join(key_failures)
+        )
+
     # If we get here, none of the authentication methods worked.
     # Note: uvx users can't place files "in the script directory" because uvx runs
     # the code from ~/.cache/uv/archive-v0/<hash>/lib/python*/site-packages/ — an
@@ -170,8 +221,7 @@ def get_gsc_service():
         f"Authentication failed. Please either:\n"
         f"1. Set up OAuth by setting GSC_OAUTH_CLIENT_SECRETS_FILE to an absolute path, "
         f"or (for clone installs) placing a client_secrets.json file in the script "
-        f"directory, then call the 'reauthenticate' tool to open a browser login window "
-        f"and complete authentication, or\n"
+        f"directory; the browser sign-in starts on first use, or\n"
         f"2. Set GSC_CREDENTIALS_PATH to an absolute path, or (for clone installs) "
         f"place a service account credentials file in one of these locations: "
         f"{', '.join([p for p in POSSIBLE_CREDENTIAL_PATHS[1:] if p])}\n"
@@ -208,8 +258,7 @@ def get_gsc_service_oauth():
             try:
                 creds.refresh(Request())
                 # Save the refreshed credentials
-                with open(TOKEN_FILE, 'w') as token:
-                    token.write(creds.to_json())
+                _write_token(TOKEN_FILE, creds.to_json())
             except Exception as e:
                 # Refresh failed (revoked/expired refresh token, network error, or a
                 # scope mismatch). Do NOT delete the token file — a transient failure
@@ -225,8 +274,8 @@ def get_gsc_service_oauth():
             # Check if client secrets file exists
             if not os.path.exists(OAUTH_CLIENT_SECRETS_FILE):
                 raise FileNotFoundError(
-                    f"OAuth client secrets file not found. Please place a client_secrets.json file in the script directory "
-                    f"or set the GSC_OAUTH_CLIENT_SECRETS_FILE environment variable."
+                    "OAuth client secrets file not found. Please place a client_secrets.json file in the script directory "
+                    "or set the GSC_OAUTH_CLIENT_SECRETS_FILE environment variable."
                 )
 
             # Start OAuth flow — opens a browser window on macOS even from MCP subprocess.
@@ -234,8 +283,7 @@ def get_gsc_service_oauth():
             creds = flow.run_local_server(port=0)
             
             # Save the credentials for future use
-            with open(TOKEN_FILE, 'w') as token:
-                token.write(creds.to_json())
+            _write_token(TOKEN_FILE, creds.to_json())
     
     # Build and return the service
     return build("searchconsole", "v1", credentials=creds, cache_discovery=False)
@@ -284,16 +332,15 @@ async def _execute(request):
 async def get_capabilities() -> str:
     """
     Get a full list of all available tools, current auth status, and how to get started.
-    ALWAYS call this first when asked what tools are available, what this server can do,
-    or how to get started. Returns all tool names grouped by category in a single call —
-    faster than searching individually. Also shows if authentication is needed.
+    Use when asked what tools are available, what this server can do, or how to get
+    started. Returns all tool names grouped by category in a single call.
     """
     # Check auth status
     try:
         get_gsc_service()
         auth_status = "✅ Authenticated — ready to use all tools."
     except Exception as e:
-        auth_status = f"❌ Not authenticated — call the 'reauthenticate' tool first to open a browser login window.\nDetails: {e}"
+        auth_status = f"❌ Not authenticated — see the setup instructions in the README.\nDetails: {e}"
 
     return f"""Google Search Console MCP Server
 
@@ -301,14 +348,11 @@ AUTH STATUS:
 {auth_status}
 
 GETTING STARTED:
-1. If not authenticated, call the 'reauthenticate' tool to complete OAuth login.
+1. If not authenticated, follow the README's authentication setup.
 2. Call 'list_properties' to see all your GSC sites and get the exact site_url for other tools.
 3. Use any tool below with the site_url from step 2.
 
 AVAILABLE TOOLS:
-
-Authentication:
-  - reauthenticate: Open browser OAuth login window. Call this if you see auth errors.
 
 Properties:
   - list_properties: List all GSC sites/properties you have access to (start here)
@@ -329,7 +373,7 @@ URL Inspection & Indexing:
 Sitemaps:
   - get_sitemaps: List all sitemaps for a site
   - list_sitemaps_enhanced: Detailed sitemap info including errors and warnings
-  - manage_sitemaps: Submit or delete sitemaps (requires GSC_ALLOW_DESTRUCTIVE=true for delete)
+  - manage_sitemaps: List, inspect, submit or delete sitemaps (submit and delete require GSC_ALLOW_DESTRUCTIVE=true)
 
 Destructive (disabled by default, set GSC_ALLOW_DESTRUCTIVE=true to enable):
   - add_site: Add a new property to GSC
@@ -342,7 +386,7 @@ async def list_properties() -> str:
     """
     List all Google Search Console (GSC) properties and sites the user has access to.
     Use this to see all verified sites, domain properties, and URL-prefix properties
-    in the connected Google Search Console account. Always call this first to get the
+    in the connected Google Search Console account. Use it to get the
     exact site_url needed for other tools.
     """
     try:
@@ -414,24 +458,24 @@ async def add_site(site_url: str) -> str:
             return f"Site {site_url} is already added to Search Console."
         elif error_code == 403:
             if error_reason == 'forbidden':
-                return f"Error: You don't have permission to add this site. Please verify ownership first."
+                return "Error: You don't have permission to add this site. Please verify ownership first."
             elif error_reason == 'quotaExceeded':
-                return f"Error: API quota exceeded. Please try again later."
+                return "Error: API quota exceeded. Please try again later."
             else:
                 return f"Error: Permission denied. {error_message}"
         elif error_code == 400:
             if error_reason == 'invalidParameter':
-                return f"Error: Invalid site URL format. Please check the URL format and try again."
+                return "Error: Invalid site URL format. Please check the URL format and try again."
             else:
                 return f"Error: Bad request. {error_message}"
         elif error_code == 401:
-            return f"Error: Unauthorized. Please check your credentials."
+            return "Error: Unauthorized. Please check your credentials."
         elif error_code == 429:
-            return f"Error: Too many requests. Please try again later."
+            return "Error: Too many requests. Please try again later."
         elif error_code == 500:
-            return f"Error: Internal server error from Google Search Console API. Please try again later."
+            return "Error: Internal server error from Google Search Console API. Please try again later."
         elif error_code == 503:
-            return f"Error: Service unavailable. Google Search Console API is currently down. Please try again later."
+            return "Error: Service unavailable. Google Search Console API is currently down. Please try again later."
         else:
             return f"Error adding site (HTTP {error_code}): {error_message}"
     except Exception as e:
@@ -468,24 +512,24 @@ async def delete_site(site_url: str) -> str:
             return f"Site {site_url} was not found in Search Console."
         elif error_code == 403:
             if error_reason == 'forbidden':
-                return f"Error: You don't have permission to remove this site."
+                return "Error: You don't have permission to remove this site."
             elif error_reason == 'quotaExceeded':
-                return f"Error: API quota exceeded. Please try again later."
+                return "Error: API quota exceeded. Please try again later."
             else:
                 return f"Error: Permission denied. {error_message}"
         elif error_code == 400:
             if error_reason == 'invalidParameter':
-                return f"Error: Invalid site URL format. Please check the URL format and try again."
+                return "Error: Invalid site URL format. Please check the URL format and try again."
             else:
                 return f"Error: Bad request. {error_message}"
         elif error_code == 401:
-            return f"Error: Unauthorized. Please check your credentials."
+            return "Error: Unauthorized. Please check your credentials."
         elif error_code == 429:
-            return f"Error: Too many requests. Please try again later."
+            return "Error: Too many requests. Please try again later."
         elif error_code == 500:
-            return f"Error: Internal server error from Google Search Console API. Please try again later."
+            return "Error: Internal server error from Google Search Console API. Please try again later."
         elif error_code == 503:
-            return f"Error: Service unavailable. Google Search Console API is currently down. Please try again later."
+            return "Error: Service unavailable. Google Search Console API is currently down. Please try again later."
         else:
             return f"Error removing site (HTTP {error_code}): {error_message}"
     except Exception as e:
@@ -1466,10 +1510,8 @@ async def list_sitemaps_enhanced(site_url: str, sitemap_index: str | None = None
         # Get sitemaps list
         if sitemap_index:
             sitemaps = await _execute(service.sitemaps().list(siteUrl=site_url, sitemapIndex=sitemap_index))
-            source = f"child sitemaps from index: {sitemap_index}"
         else:
             sitemaps = await _execute(service.sitemaps().list(siteUrl=site_url))
-            source = "all submitted sitemaps"
         
         if not sitemaps.get("sitemap"):
             return f"No sitemaps found for {site_url}" + (f" in index {sitemap_index}" if sitemap_index else ".")
@@ -1581,6 +1623,11 @@ async def submit_sitemap(site_url: str, sitemap_url: str) -> str:
                   domain property as site_url and filter by page to analyze a specific subdomain.
         sitemap_url: The full URL of the sitemap to submit
     """
+    if not ALLOW_DESTRUCTIVE:
+        return (
+            "Safety: submit_sitemap changes your GSC account. "
+            "Set GSC_ALLOW_DESTRUCTIVE=true in your environment to enable write tools."
+        )
     try:
         service = get_gsc_service()
         
@@ -1690,112 +1737,20 @@ async def manage_sitemaps(site_url: str, action: str, sitemap_url: str | None = 
     except Exception as e:
         return f"Error managing sitemaps: {str(e)}"
 
-@mcp.tool()
-async def get_creator_info() -> str:
-    """
-    Provides information about Amin Foroutan, the creator of the MCP-GSC tool.
-    """
-    creator_info = """
-# About the Creator: Amin Foroutan
-
-Amin Foroutan is an SEO consultant with over a decade of experience, specializing in technical SEO, Python-driven tools, and data analysis for SEO performance.
-
-## Connect with Amin:
-
-- **LinkedIn**: [Amin Foroutan](https://www.linkedin.com/in/ma-foroutan/)
-- **Personal Website**: [aminforoutan.com](https://aminforoutan.com/)
-- **YouTube**: [Amin Forout](https://www.youtube.com/channel/UCW7tPXg-rWdH4YzLrcAdBIw)
-- **X (Twitter)**: [@aminfseo](https://x.com/aminfseo)
-
-## Notable Projects:
-
-Amin has created several popular SEO tools including:
-- Advanced GSC Visualizer (6.4K+ users)
-- SEO Render Insight Tool (3.5K+ users)
-- Google AI Overview Impact Analysis (1.2K+ users)
-- Google AI Overview Citation Analysis (900+ users)
-- SEMRush Enhancer (570+ users)
-- SEO Page Inspector (115+ users)
-
-## Expertise:
-
-Amin combines technical SEO knowledge with programming skills to create innovative solutions for SEO challenges.
-"""
-    return creator_info
-
-@mcp.tool()
-async def reauthenticate() -> str:
-    """
-    Perform a logout and new login sequence.
-    Deletes the current OAuth token file and triggers the browser authentication flow.
-    Useful when you need to switch to a different Google account.
-    """
-    try:
-        # Delete existing token to force re-authentication
-        if os.path.exists(TOKEN_FILE):
-            os.remove(TOKEN_FILE)
-            token_deleted = True
-        else:
-            token_deleted = False
-
-        # Check if OAuth client secrets file exists
-        if not os.path.exists(OAUTH_CLIENT_SECRETS_FILE):
-            return (
-                "Error: OAuth client secrets file not found. "
-                "Cannot start new authentication flow. "
-                "Please ensure client_secrets.json is present or set the "
-                "GSC_OAUTH_CLIENT_SECRETS_FILE environment variable."
-            )
-
-        # Trigger new OAuth flow — opens a browser window on the local machine.
-        # run_local_server() works on macOS even from an MCP subprocess because
-        # macOS can open browsers via webbrowser.open() regardless of TTY state.
-        flow = InstalledAppFlow.from_client_secrets_file(OAUTH_CLIENT_SECRETS_FILE, SCOPES)
-        creds = flow.run_local_server(port=0)
-
-        # Save the new credentials for future use
-        with open(TOKEN_FILE, "w") as token:
-            token.write(creds.to_json())
-
-        msg = "Successfully authenticated with a new Google account."
-        if token_deleted:
-            msg = "Previous session deleted. " + msg
-        return msg
-
-    except Exception as e:
-        return f"Error during reauthentication: {str(e)}"
-
 
 def main():
-    """Entry point for the MCP server. Supports stdio (default) and SSE transports."""
+    """Entry point for the MCP server. stdio only.
+
+    The upstream SSE/HTTP mode served every tool with no authentication and turned
+    off DNS-rebinding protection, so any web page could reach it. The briebug fork
+    removes it (security review 2026-11-09, finding F2).
+    """
     transport = os.environ.get("MCP_TRANSPORT", "stdio").lower()
-    host = os.environ.get("MCP_HOST", "127.0.0.1")
-    try:
-        port = int(os.environ.get("MCP_PORT", "3001"))
-    except ValueError:
-        raise ValueError("MCP_PORT must be an integer")
-
-    if transport == "stdio":
-        mcp.run(transport="stdio")
-    elif transport in {"sse", "http"}:
-        # mcp SDK >= 1.27 removed the host/port kwargs from run() (they must be
-        # set on mcp.settings instead) and enabled DNS-rebinding protection with
-        # a Host allowlist of localhost only — which 421s the remote/Docker
-        # binding the operator explicitly opted into via MCP_HOST. Disable that
-        # check for the documented remote path. See issues #30 and #33.
-        mcp.settings.host = host
-        mcp.settings.port = port
-        try:
-            mcp.settings.transport_security.enable_dns_rebinding_protection = False
-        except Exception:
-            pass
-        mcp.run(transport="sse")
-    else:
+    if transport != "stdio":
         raise ValueError(
-            f"Unknown MCP_TRANSPORT '{transport}'. "
-            "Use 'stdio' (default) or 'sse'."
+            f"Unsupported MCP_TRANSPORT '{transport}'. This build runs over stdio only."
         )
-
+    mcp.run(transport="stdio")
 
 if __name__ == "__main__":
     main()

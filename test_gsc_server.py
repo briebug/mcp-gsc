@@ -5,7 +5,6 @@ All Google API calls are mocked — no real credentials are needed to run these 
 Run with: pytest test_gsc_server.py -v
 """
 import asyncio
-import importlib
 import io
 import json
 import os
@@ -13,8 +12,7 @@ import sys
 import tempfile
 import time
 import unittest
-from datetime import datetime, timedelta
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
 
 
 # ---------------------------------------------------------------------------
@@ -25,6 +23,7 @@ def _load_module(env_overrides: dict | None = None):
     """Import gsc_server with a fresh environment."""
     env = {
         "GSC_SKIP_OAUTH": "true",          # prevent live OAuth attempts by default
+        "GSC_USE_ADC": "false",            # a developer's exported ADC setting must not leak in
         "GSC_DATA_STATE": "all",
         "GSC_ALLOW_DESTRUCTIVE": "false",
         **(env_overrides or {}),
@@ -88,7 +87,7 @@ class TestAuth(unittest.TestCase):
                     "GSC_CONFIG_DIR": new_config_dir,
                 }
                 with patch.dict(os.environ, env, clear=False):
-                    import gsc_server as mod
+                    import gsc_server as mod  # noqa: F401 -- the import runs the token migration under test
 
                 new_token_path = os.path.join(new_config_dir, "token.json")
                 self.assertTrue(os.path.exists(new_token_path), "Token was not migrated to new location")
@@ -958,42 +957,8 @@ class TestSafetyGuards(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("Safety", result)
 
 
-# ---------------------------------------------------------------------------
-# TestReauthenticate
-# ---------------------------------------------------------------------------
-
-class TestReauthenticate(unittest.IsolatedAsyncioTestCase):
-
-    async def test_deletes_token_file(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            token_path = os.path.join(tmpdir, "token.json")
-            open(token_path, "w").write('{"old": "token"}')
-            secrets_path = os.path.join(tmpdir, "secrets.json")
-            open(secrets_path, "w").write("{}")
-
-            mod = _load_module()
-
-            mock_creds = MagicMock()
-            mock_creds.to_json.return_value = '{"token": "new"}'
-
-            with patch.object(mod, "TOKEN_FILE", token_path), \
-                 patch.object(mod, "OAUTH_CLIENT_SECRETS_FILE", secrets_path), \
-                 patch("gsc_server.InstalledAppFlow") as mock_flow_cls:
-                mock_flow = MagicMock()
-                mock_flow.run_local_server.return_value = mock_creds
-                mock_flow_cls.from_client_secrets_file.return_value = mock_flow
-                result = await mod.reauthenticate()
-
-            self.assertIn("Successfully authenticated", result)
-            self.assertIn("Previous session deleted", result)
-            self.assertTrue(os.path.exists(token_path))
-
-    async def test_returns_error_when_no_secrets_file(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            mod = _load_module()
-            with patch.object(mod, "OAUTH_CLIENT_SECRETS_FILE", os.path.join(tmpdir, "no_secrets.json")):
-                result = await mod.reauthenticate()
-        self.assertIn("Error", result)
+# TestReauthenticate removed: the briebug fork drops the reauthenticate tool
+# (security review 2026-11-09, F6). test_hardening.py asserts it is not registered.
 
 
 # ---------------------------------------------------------------------------
