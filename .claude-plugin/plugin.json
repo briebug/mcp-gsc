@@ -7,8 +7,8 @@
     "name": "Amin Foroutan"
   },
   "license": "MIT",
-  "homepage": "https://advancedgsc.com",
-  "repository": "https://github.com/AminForou/mcp-gsc",
+  "homepage": "https://github.com/briebug/mcp-gsc",
+  "repository": "https://github.com/briebug/mcp-gsc",
   "keywords": ["seo", "google-search-console", "analytics", "mcp", "gsc"],
   "logo": "./assets/logo.png",
   "skills": "./skills/",

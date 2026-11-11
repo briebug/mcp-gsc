@@ -12,9 +12,6 @@
 
 A Model Context Protocol (MCP) server that connects [Google Search Console](https://search.google.com/search-console/about) (GSC) to AI assistants, allowing you to analyze your SEO data through natural language conversations. Works with **Claude Desktop**, **Cursor**, **Codex CLI**, **Gemini CLI**, **Antigravity**, and any other MCP-compatible client.
 
-> **Skip setup, get more.** A more advanced hosted version — one-click sign-in, GA4, Google Ads, SERP lookups, keyword research, and a lot more. Works with Claude, ChatGPT, Cursor, Grok, and any other MCP client.
-> → [**Advanced MCP for SEO professionals (hosted)**](https://www.advancedgsc.com/mcp?utm_source=github&utm_medium=readme&utm_campaign=mcp-gsc&utm_content=hero-callout)
-
 ---
 
 ## What's New
@@ -75,14 +72,6 @@ See the full version history in the [Changelog](#changelog) below.
 | `manage_sitemaps` | Submit or delete sitemaps | Site URL, action |
 
 *Ask your AI assistant to "call get_capabilities" for the full list of all 19 tools.*
-
----
-
-<div align="center">
-  <a href="https://www.advancedgsc.com/mcp?utm_source=github&utm_medium=readme&utm_campaign=mcp-gsc&utm_content=banner">
-    <img src="assets/banner-1.jpg" alt="Skip setup — try the hosted MCP server with one-click Google sign-in. Works in ChatGPT and Claude web. Includes GA4 and advanced SEO tools." width="800" style="margin: 20px 0; border-radius: 8px;">
-  </a>
-</div>
 
 ---
 
